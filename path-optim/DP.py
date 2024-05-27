@@ -7,9 +7,10 @@ from matplotlib.colors import Normalize
 home = os.path.expanduser("~") # os independent home
 
 # local load of additional modules.
-sys.path.append(os.path.join(home,'OneDrive/DISTINGUISH/ECMOR_study/deep-borehole-inverse-problem/KERNEL'))
-sys.path.append(os.path.join(home,'OneDrive/DISTINGUISH/ECMOR_study/deep-borehole-inverse-problem/USER_SERGEY'))
-sys.path.append(os.path.join(home,'OneDrive/DISTINGUISH/ECMOR_study/gan-geosteering'))
+sys.path.append(os.path.join(os.getcwd(), 'deep-borehole-inverse-problem/KERNEL'))
+sys.path.append(os.path.join(os.getcwd(), 'deep-borehole-inverse-problem/USER_SERGEY'))
+sys.path.append(os.path.join(os.getcwd(), 'gan-geosteering'))
+
 
 from vector_to_image import GanEvaluator
 
@@ -100,19 +101,66 @@ def dynamic_programming1(weights, start_point):
     return dp, dp[end_row, -1], optimal_path
 
 
-gan_file_name = os.path.join(home,'OneDrive/DISTINGUISH/ECMOR_study/gan-geosteering/f2020_rms_5_10_50_60/netG_epoch_4662.pth')
+gan_file_name = os.path.join(os.getcwd(), 'gan-geosteering/f2020_rms_5_10_50_60/netG_epoch_4662.pth')
 gan_vec_size = 60
 gan_evaluator = GanEvaluator(gan_file_name, gan_vec_size)
 
+def calculate_body_sizes(single_earth_model_2d, value_for_channel=None):
+    if value_for_channel is None:
+        # Define the default weights for the channels
+        value_for_channel = {
+            1: 1,   # Weight for channel body
+            2: 0.5  # Weight for crevasse
+        }
+
+
+    # Initialize the result matrix with zeros
+    result_matrix = np.zeros_like(single_earth_model_2d[1, :, :], dtype=float)
+
+    # Calculate connected channel-body sizes
+    for w in range(single_earth_model_2d.shape[2]):
+        channel_body_sizes = np.zeros(single_earth_model_2d.shape[1])
+        count = 0
+        total_sum = 0
+        for h in range(single_earth_model_2d.shape[1]):
+            component_sum = 0
+            for key in value_for_channel:
+                if single_earth_model_2d[key, h, w] > 0:  # Check for the specified cell type
+                    component_sum += value_for_channel[key]
+
+            if component_sum > 1:
+                print('Warning, more than one likely component')
+
+            if component_sum > 0:
+                total_sum += component_sum
+                count += 1
+            else:
+                # Update the entire connected component with the combined count using slicing
+                if count > 0:
+                    channel_body_sizes[h - count:h] = total_sum
+                count = 0
+                total_sum = 0
+
+        # Ensure the last component is updated
+        if count > 0:
+            channel_body_sizes[h - count + 1:h + 1] = total_sum
+
+        # Assign the calculated sizes to the result tensor
+        result_matrix[:, w] = channel_body_sizes
+
+    return result_matrix
 
 def evaluate_earth_model(gan_evaluator, single_realization):
     earth_model = gan_evaluator.eval(input_vec=single_realization)
-    earth_model = np.transpose(earth_model[0:3, :, :], axes=(1, 2, 0))
-    scaled_image_data = (earth_model + 1) / 2
-    norm_factors = np.sum(scaled_image_data, axis=-1, keepdims=True)
-    norm_factors[norm_factors == 0] = 1
-    normalized_rgb = scaled_image_data / norm_factors
-    return normalized_rgb
+    rounded_model = np.where(earth_model >= 0, 1, 0)
+    value_for_channel = {
+    1: 1,   # Weight for channel body
+    2: 0.5  # Weight for crevasse
+    }
+
+    result_matrix = calculate_body_sizes(rounded_model, value_for_channel)
+
+    return result_matrix
 
 
 def create_weighted_image(normalized_rgb):
@@ -137,9 +185,7 @@ def plot_results(weighted_image, optimal_path):
 
 
 def process_prior_and_plot_results(single_realization, start_point, plot_path=False):
-    normalized_rgb = evaluate_earth_model(gan_evaluator, single_realization)
-    weighted_image = create_weighted_image(normalized_rgb)
-
+    weighted_image = evaluate_earth_model(gan_evaluator, single_realization)
     dp_matrix, max_path_value, optimal_path = perform_dynamic_programming(weighted_image, start_point)
 
     if plot_path:
@@ -179,7 +225,7 @@ def process_matrix(single_realization, optimal_path, best_point, best_paths):
 
 # Example of calling the renamed function with the prior data
 if __name__ == '__main__':
-    prior_path = '/home/AD.NORCERESEARCH.NO/krfo/OneDrive/DISTINGUISH/ECMOR_study/RunFolder/debug_analysis_step_1.npz'
+    prior_path = '/home/AD.NORCERESEARCH.NO/hidj/Documents/project1/debug_analysis_step_1.npz'
     prior = np.load(prior_path, allow_pickle=True)['state'][()]['m']
     start_point = (0, 0)
     process_prior_and_plot_results(prior[:,50], start_point, plot_path=True)
